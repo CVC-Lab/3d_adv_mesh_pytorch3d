@@ -22,17 +22,18 @@ class BackgroundDataset(Dataset):
 
     """
     
-    def __init__(self, img_dir, imgsize, shuffle=True):
+    def __init__(self, img_dir, imgsize, shuffle=True, max_num=99999):
         n_jpeg_images = len(fnmatch.filter(os.listdir(img_dir), '*.jpeg'))
         n_jpg_images = len(fnmatch.filter(os.listdir(img_dir), '*.jpg'))
         n_images = n_jpeg_images + n_jpg_images
-        self.len = n_images
+        self.len = min(n_images, max_num)
         self.img_dir = img_dir
         self.imgsize = imgsize
         self.img_names = fnmatch.filter(os.listdir(img_dir), '*.jpeg') + fnmatch.filter(os.listdir(img_dir), '*.jpg')
+        self.img_names = self.img_names[:self.len]
         self.shuffle = shuffle
         self.img_paths = []
-        for img_name in self.img_names:
+        for i, img_name in enumerate(self.img_names):
             self.img_paths.append(os.path.join(self.img_dir, img_name))
     
     def __len__(self):
@@ -76,7 +77,6 @@ class BackgroundDataset(Dataset):
         scaled_img = resize(scaled_img)  # choose here
         
         return scaled_img
-
 
 # class MeshDataset(Dataset):
 #     """InriaDataset: representation of the INRIA person dataset.
