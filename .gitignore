@@ -127,3 +127,12 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+# do not upload unnecessary folders
+/data
+/background
+/weights
+/.vscode
+/out
+/faster_rcnn
