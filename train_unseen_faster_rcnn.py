@@ -123,6 +123,8 @@ class Patch():
             save_image(self.patch.cpu().detach().permute(2, 0, 1), self.config.output + '_{}.png'.format(epoch))
             print('epoch={} loss={} success_rate={}'.format(epoch, ep_loss / n, (ep_acc / n) / self.num_angles))
             self.test_patch()
+            #TODO: Pass the variable value
+            self.test_patch_faster_rcnn(path_to_checkpoint="faster_rcnn/model-180000.pth", dataset_name="coco2017", backbone_name="resnet101", prob_thresh=0.6)
 
     def test_patch(self):
         angle_success = torch.zeros(self.num_angles)
@@ -157,6 +159,63 @@ class Patch():
 
         unseen_success_rate = angle_success.mean() / len(self.test_bg_dataset)
         print('Unseen bg success rate: ', unseen_success_rate.item())
+
+    def test_patch_faster_rcnn(self, path_to_checkpoint: str, dataset_name: str, backbone_name: str, prob_thresh: float):
+        #TODO: Make it for general model(even though this might be difficult)
+        dataset_class = DatasetBase.from_name(dataset_name)
+        backbone = BackboneBase.from_name(backbone_name)(pretrained=False)
+        model = FasterRCNN(backbone, dataset_class.num_classes(), pooler_mode=Config.POOLER_MODE,
+                  anchor_ratios=Config.ANCHOR_RATIOS, anchor_sizes=Config.ANCHOR_SIZES,
+                  rpn_pre_nms_top_n=Config.RPN_PRE_NMS_TOP_N, rpn_post_nms_top_n=Config.RPN_POST_NMS_TOP_N).cuda()
+        model.load(path_to_checkpoint)
+
+        angle_success = torch.zeros(self.num_angles)
+        total_loss = 0.0
+        with torch.no_grad():
+            for mesh in self.mesh_dataset:
+                mesh = mesh.extend(self.num_angles)
+                mesh_texture = mesh.textures.maps_padded()
+                n = 0.0
+                for bg in self.test_bg_dataset:
+
+                    mesh_texture[:, 575:675, 475:575, :] = self.patch[None]
+
+                    images = self.render_mesh_on_bg(mesh, bg)
+                    reshape_img = images[:,:,:,:3].permute(0, 3, 1, 2)
+                    #reshape_img = reshape_img.to(self.device)
+
+
+                    for angle in range(self.num_angles):
+                        image = torchvision.transforms.ToPILImage()(reshape_img[angle,:,:,:].cpu())
+                        image_tensor, scale = dataset_class.preprocess(image, Config.IMAGE_MIN_SIDE, Config.IMAGE_MAX_SIDE)
+
+                        detection_bboxes, detection_classes, detection_probs, _ = \
+                            model.eval().forward(image_tensor.unsqueeze(dim=0).cuda())
+                        detection_bboxes /= scale
+
+                        kept_indices = detection_probs > prob_thresh
+                        detection_bboxes = detection_bboxes[kept_indices]
+                        detection_classes = detection_classes[kept_indices]
+                        detection_probs = detection_probs[kept_indices]
+
+                        draw = ImageDraw.Draw(image)
+
+                        for bbox, cls, prob in zip(detection_bboxes.tolist(), detection_classes.tolist(), detection_probs.tolist()):
+                            color = random.choice(['red', 'green', 'blue', 'yellow', 'purple', 'white'])
+                            bbox = BBox(left=bbox[0], top=bbox[1], right=bbox[2], bottom=bbox[3])
+                            category = dataset_class.LABEL_TO_CATEGORY_DICT[cls]
+
+                            draw.rectangle(((bbox.left, bbox.top), (bbox.right, bbox.bottom)), outline=color)
+                            draw.text((bbox.left, bbox.top), text=f'{category:s} {prob:.3f}', fill=color)
+                        if angle==0:
+                            image.save("out/images/test_%d.png" % n)
+
+                        #angle_success[angle] += success
+
+                    n += 1.0
+
+        unseen_success_rate = angle_success.mean() / len(self.test_bg_dataset)
+        print('Unseen model (faster_rcnn) success rate: ', unseen_success_rate.item())
 
     def create_renderer(self):
         self.num_angles = self.config.num_angles
@@ -261,6 +320,9 @@ def main():
         device = torch.device("cpu")
 
     trainer = Patch(config, device)
+
+    # Faster RCNN setup to match the checkpoints
+    Config.setup(image_min_side=800, image_max_side=1333, anchor_sizes="[64, 128, 256, 512]", rpn_post_nms_top_n=1000)
 
     trainer.attack()
 

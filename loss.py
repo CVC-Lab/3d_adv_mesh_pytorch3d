@@ -22,7 +22,8 @@ def dis_loss(output, num_classes, anchors, num_anchors, target_id=0, only_object
 
     all_target_acc = []
     det_confs = torch.sigmoid(output[4])
-    cls_confs = torch.nn.Softmax()(Variable(output[5:5 + num_classes].transpose(0, 1)))
+    #TODO: Double chekc if this is correct
+    cls_confs = F.softmax(Variable(output[5:5 + num_classes].transpose(0, 1)), -1)
     cls_max_confs, cls_max_ids = torch.max(cls_confs, 1)
     cls_max_confs = cls_max_confs.view(-1)
     cls_max_ids = cls_max_ids.view(-1)
@@ -48,7 +49,9 @@ def calc_acc(output, num_classes, num_anchors, target_id):
 
     all_target_acc = []
     det_confs = torch.sigmoid(output[4])
-    cls_confs = torch.nn.Softmax()(Variable(output[5:5 + num_classes].transpose(0, 1)))
+    
+    #TODO: Double check if this is correct
+    cls_confs = F.softmax(Variable(output[5:5 + num_classes].transpose(0, 1)), -1)
     cls_max_confs, cls_max_ids = torch.max(cls_confs, 1)
     cls_max_confs = cls_max_confs.view(-1)
     cls_max_ids = cls_max_ids.view(-1)
