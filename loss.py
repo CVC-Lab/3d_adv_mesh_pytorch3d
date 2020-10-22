@@ -77,9 +77,10 @@ class TotalVariation(nn.Module):
         super(TotalVariation, self).__init__()
     
     def forward(self, adv_patch):
-        tvcomp1 = torch.sum(torch.abs(adv_patch[:, :, 1:] - adv_patch[:, :, :-1] + 0.000001), 0)
+        # adv_patch : (H, W, C)
+        tvcomp1 = torch.sum(torch.abs(adv_patch[:, 1:, :] - adv_patch[:, :-1, :] + 0.000001), 0)
         tvcomp1 = torch.sum(torch.sum(tvcomp1, 0), 0)
-        tvcomp2 = torch.sum(torch.abs(adv_patch[:, 1:, :] - adv_patch[:, :-1, :] + 0.000001), 0)
+        tvcomp2 = torch.sum(torch.abs(adv_patch[1:, :, :] - adv_patch[:-1, :, :] + 0.000001), 0)
         tvcomp2 = torch.sum(torch.sum(tvcomp2, 0), 0)
         tv = tvcomp1 + tvcomp2
         return tv / torch.numel(adv_patch)

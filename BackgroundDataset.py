@@ -6,6 +6,7 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch
+import random
 
 class BackgroundDataset(Dataset):
     """InriaDataset: representation of the INRIA person dataset.
@@ -31,6 +32,7 @@ class BackgroundDataset(Dataset):
         self.imgsize = imgsize
         self.img_names = fnmatch.filter(os.listdir(img_dir), '*.jpeg') + fnmatch.filter(os.listdir(img_dir), '*.jpg')
         self.img_names = self.img_names[:self.len]
+        random.shuffle(self.img_names)
         self.shuffle = shuffle
         self.img_paths = []
         for i, img_name in enumerate(self.img_names):
