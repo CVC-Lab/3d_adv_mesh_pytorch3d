@@ -32,6 +32,7 @@ from pytorch3d.renderer import (
 import sys
 import os
 
+
 from MeshDataset import MeshDataset
 from BackgroundDataset import BackgroundDataset
 from darknet import Darknet
@@ -53,9 +54,10 @@ class Patch():
         self.test_bg_dataset = BackgroundDataset(config.test_bg_dir, config.img_size, max_num=config.num_test_bgs)
 
         # Initialize adversarial patch, and TV loss
-        self.patch = torch.rand((100, 100, 3), device=device, requires_grad=True)
+        #self.patch = torch.rand((100, 100, 3), device=device, requires_grad=True)
         self.total_variation = TotalVariation().to(device)
-
+        self.patch = None
+        self.idx = None
         # Yolo model:
         self.dnet = Darknet(self.config.cfgfile)
         self.dnet.load_weights(self.config.weightfile)
@@ -68,8 +70,55 @@ class Patch():
             batch_size=self.config.batch_size, 
             shuffle=True, 
             num_workers=1)
+        mesh = self.mesh_dataset.meshes[0]
+        box = mesh.get_bounding_boxes()
+        max_x = box[0,0,1]
+        max_y = box[0,1,1]
+        max_z = box[0,2,1]
+        min_x = box[0,0,0]
+        min_y = box[0,1,0]
+        min_z = box[0,2,0]
 
+        len_z = max_z - min_z
+        len_x = max_x - min_x
+        len_y = max_y - min_y
+        print(max_x)
+        print(min_x)
+        verts = mesh.verts_padded()
+        v_shape = verts.shape
+        sampled_verts = torch.zeros(v_shape[1]).to('cuda')
+        print(v_shape)
+        for i in range(v_shape[1]):
+          #original human1 not SMPL
+          if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.3 and verts[0,i,0] < min_x + len_x*0.7 and verts[0,i,1] > min_y + len_y*0.6 and verts[0,i,1] < min_y + len_y*0.7:
+          #SMPL front
+          #if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
+          #back
+          #if verts[0,i,2] < min_z + len_z * 0.5 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
+          #leg
+          #if verts[0,i,0] > min_x + len_x*0.5 and verts[0,i,0] < min_x + len_x and verts[0,i,1] > min_y + len_y*0.2 and verts[0,i,1] < min_y + len_y*0.3:
+            sampled_verts[i] = 1
+        print(sampled_verts.sum())
+        faces = mesh.faces_padded()
+        f_shape = faces.shape
+        print(f_shape)
+        sampled_planes = list()
+        for i in range(faces.shape[1]):
+          v1 = faces[0,i,0]
+          v2 = faces[0,i,1]
+          v3 = faces[0,i,2]
+          if sampled_verts[v1]+sampled_verts[v2]+sampled_verts[v3]>=1:
+            sampled_planes.append(i)
+        idx = torch.Tensor(sampled_planes).long().to('cuda')
+        self.idx = idx
+        patch = torch.rand(len(sampled_planes), 4, 4, 3, device=('cuda'), requires_grad=True)
+        self.patch = patch
+        #sampled_planes = torch.Tensor(sampled_planes).to(device)
+
+        print(patch.shape)
+        total_variation = TotalVariation().cuda()
         optimizer = torch.optim.SGD([self.patch], lr=1.0, momentum=0.9)
+        #optimizer = torch.optim.SGD([self.patch], lr=1.0, momentum=0.9)
 
         for epoch in range(self.config.epochs):
             ep_loss = 0.0
@@ -79,19 +128,30 @@ class Patch():
             for mesh in self.mesh_dataset:
                 # Copy mesh for each camera angle
                 mesh = mesh.extend(self.num_angles)
-                mesh_texture = mesh.textures.maps_padded()
-
+                #mesh_texture = mesh.textures.maps_padded()
+                #c = 0
                 for bg_batch in train_bgs:
+                    #c = c+1
+                    #print('iter'+ str(c))
                     bg_batch = bg_batch.to(self.device)
 
                     optimizer.zero_grad()
                     
                     # Apply patch to mesh texture (hard coded for now)
-                    mesh_texture[:, 575:675, 475:575, :] = self.patch[None]
+                    #mesh_texture[:, 575:675, 475:575, :] = self.patch[None]
+
+                    texture_image=mesh.textures.atlas_padded()
+                    mesh.textures._atlas_padded[0,self.idx,:,:,:] = self.patch
+      
+                    mesh.textures.atlas = mesh.textures._atlas_padded
+                    mesh.textures._atlas_list = None
 
                     # Render mesh onto background image
                     # images = self.render_mesh_on_bg(mesh, bg)
-                    images = self.render_mesh_on_bg_batch(mesh, bg_batch)
+                    #images = self.render_mesh_on_bg_batch(mesh, bg_batch)
+                    rand_translation = torch.randint(-100, 100, (2,))
+                    images = self.render_mesh_on_bg_batch(mesh, bg_batch, x_translation=rand_translation[0].item(),
+                                                          y_translation=rand_translation[1].item())
                     # print('images: ', images.shape)
                     reshape_img = images[:,:,:,:3].permute(0, 3, 1, 2)
                     reshape_img = reshape_img.to(self.device)
@@ -118,7 +178,11 @@ class Patch():
                     optimizer.step()
             
             # Save image and print performance statistics
-            save_image(self.patch.cpu().detach().permute(2, 0, 1), self.config.output + '_{}.png'.format(epoch))
+            patch_save = self.patch.cpu().detach().clone()
+            idx_save = self.idx.cpu().detach().clone()
+            torch.save(patch_save, 'patch_save.pt')
+            torch.save(idx_save, 'idx_save.pt')
+            #save_image(self.patch.cpu().detach().permute(2, 0, 1), self.config.output + '_{}.png'.format(epoch))
             print('epoch={} loss={} success_rate={}'.format(
               epoch, 
               (ep_loss / n), 
@@ -133,12 +197,22 @@ class Patch():
         n = 0.0
         for mesh in self.mesh_dataset:
             mesh = mesh.extend(self.num_angles)
-            mesh_texture = mesh.textures.maps_padded()
+            #mesh_texture = mesh.textures.maps_padded()
             for bg in self.test_bg_dataset:
                 
-                mesh_texture[:, 575:675, 475:575, :] = self.patch[None]
-
-                images = self.render_mesh_on_bg(mesh, bg)
+                #mesh_texture[:, 575:675, 475:575, :] = self.patch[None]
+                texture_image=mesh.textures.atlas_padded()
+                mesh.textures._atlas_padded[0,self.idx,:,:,:] = self.patch
+      
+                mesh.textures.atlas = mesh.textures._atlas_padded
+                mesh.textures._atlas_list = None
+                
+                #images = self.render_mesh_on_bg(mesh, bg)
+                
+                rand_translation = torch.randint(-100, 100, (2,))
+                images = self.render_mesh_on_bg(mesh, bg, x_translation=rand_translation[0].item(),
+                                                y_translation=rand_translation[1].item())
+                
                 reshape_img = images[:,:,:,:3].permute(0, 3, 1, 2)
                 reshape_img = reshape_img.to(self.device)
                 output = self.dnet(reshape_img)
