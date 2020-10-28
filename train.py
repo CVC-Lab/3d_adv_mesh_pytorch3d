@@ -90,9 +90,9 @@ class Patch():
         print(v_shape)
         for i in range(v_shape[1]):
           #original human1 not SMPL
-          if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.3 and verts[0,i,0] < min_x + len_x*0.7 and verts[0,i,1] > min_y + len_y*0.6 and verts[0,i,1] < min_y + len_y*0.7:
+          #if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.3 and verts[0,i,0] < min_x + len_x*0.7 and verts[0,i,1] > min_y + len_y*0.6 and verts[0,i,1] < min_y + len_y*0.7:
           #SMPL front
-          #if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
+          if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
           #back
           #if verts[0,i,2] < min_z + len_z * 0.5 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
           #leg
@@ -111,7 +111,7 @@ class Patch():
             sampled_planes.append(i)
         idx = torch.Tensor(sampled_planes).long().to('cuda')
         self.idx = idx
-        patch = torch.rand(len(sampled_planes), 4, 4, 3, device=('cuda'), requires_grad=True)
+        patch = torch.rand(len(sampled_planes), 1, 1, 3, device=('cuda'), requires_grad=True)
         self.patch = patch
         #sampled_planes = torch.Tensor(sampled_planes).to(device)
 
@@ -163,10 +163,10 @@ class Patch():
                     d_loss = dis_loss(output, self.dnet.num_classes, self.dnet.anchors, self.dnet.num_anchors, 0)
                     acc_loss = calc_acc(output, self.dnet.num_classes, self.dnet.num_anchors, 0)
 
-                    tv = self.total_variation(self.patch)
-                    tv_loss = tv * 2.5
+                    #tv = self.total_variation(self.patch)
+                    #tv_loss = tv * 2.5
                     
-                    loss = d_loss + torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
+                    loss = d_loss #+ torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
 
                     ep_loss += loss.item()
                     ep_acc += acc_loss.item()
@@ -182,6 +182,7 @@ class Patch():
             idx_save = self.idx.cpu().detach().clone()
             torch.save(patch_save, 'patch_save.pt')
             torch.save(idx_save, 'idx_save.pt')
+            save_image(reshape_img[0].cpu().detach(), "TEST_RENDER1.png")
             #save_image(self.patch.cpu().detach().permute(2, 0, 1), self.config.output + '_{}.png'.format(epoch))
             print('epoch={} loss={} success_rate={}'.format(
               epoch, 
@@ -223,10 +224,10 @@ class Patch():
                     acc_loss = calc_acc(output[angle], self.dnet.num_classes, self.dnet.num_anchors, 0)
                     angle_success[angle] += acc_loss.item()
 
-                tv = self.total_variation(self.patch)
-                tv_loss = tv * 2.5
+                #tv = self.total_variation(self.patch)
+                #tv_loss = tv * 2.5
                 
-                loss = d_loss + torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
+                loss = d_loss #+ torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
 
                 total_loss += loss.item()
                 n += 1.0
@@ -238,11 +239,11 @@ class Patch():
         self.num_angles = self.config.num_angles
         azim = torch.linspace(-1 * self.config.angle_range, self.config.angle_range, self.num_angles)
 
-        R, T = look_at_view_transform(dist=1.0, elev=0, azim=azim)
+        #R, T = look_at_view_transform(dist=1.0, elev=0, azim=azim)
 
-        T[:, 1] = -85
-        T[:, 2] = 200
-
+        #T[:, 1] = -85
+        #T[:, 2] = 200
+        R, T = look_at_view_transform(2.2, 6, azim)
         cameras = FoVPerspectiveCameras(device=self.device, R=R, T=T)
         
         raster_settings = RasterizationSettings(
@@ -308,6 +309,7 @@ class Patch():
         num_bgs = bg_imgs.shape[0]
 
         images = self.renderer(mesh) # (num_angles, 416, 416, 4)
+        save_image(images[0,...,:3].cpu().detach().permute(2, 0, 1), "TEST_RENDER2.png")
         images = torch.cat(num_bgs*[images], dim=0) # (num_angles * num_bgs, 416, 416, 4)
 
         bg_shape = bg_imgs.shape
