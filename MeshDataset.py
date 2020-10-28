@@ -18,7 +18,7 @@ class MeshDataset(Dataset):
     print('Meshes: ', self.mesh_files)
     self.meshes = []
     for mesh in self.mesh_files:
-      self.meshes.append(load_objs_as_meshes([mesh], device=device, create_texture_atlas = True))
+      self.meshes.append(load_objs_as_meshes([mesh], device=device, create_texture_atlas = True,texture_atlas_size = 1))
 
   def __len__(self):
     return self.len
