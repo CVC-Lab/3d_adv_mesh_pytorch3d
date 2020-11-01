@@ -136,3 +136,6 @@ dmypy.json
 /.vscode
 /out
 /faster_rcnn
+*.png
+*.pt
+train_tmp.py
