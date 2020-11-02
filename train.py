@@ -36,7 +36,7 @@ import os
 from MeshDataset import MeshDataset
 from BackgroundDataset import BackgroundDataset
 from darknet import Darknet
-from loss import TotalVariation, dis_loss, calc_acc
+from loss import TotalVariation, TotalVariation_3d, dis_loss, calc_acc
 
 from torchvision.utils import save_image
 
@@ -55,7 +55,7 @@ class Patch():
 
         # Initialize adversarial patch, and TV loss
         #self.patch = torch.rand((100, 100, 3), device=device, requires_grad=True)
-        self.total_variation = TotalVariation().to(device)
+        #self.total_variation = TotalVariation().to(device)
         self.patch = None
         self.idx = None
         # Yolo model:
@@ -90,9 +90,9 @@ class Patch():
         print(v_shape)
         for i in range(v_shape[1]):
           #original human1 not SMPL
-          #if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.3 and verts[0,i,0] < min_x + len_x*0.7 and verts[0,i,1] > min_y + len_y*0.6 and verts[0,i,1] < min_y + len_y*0.7:
+          if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.3 and verts[0,i,0] < min_x + len_x*0.7 and verts[0,i,1] > min_y + len_y*0.6 and verts[0,i,1] < min_y + len_y*0.7:
           #SMPL front
-          if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
+          #if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
           #back
           #if verts[0,i,2] < min_z + len_z * 0.5 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
           #leg
@@ -116,7 +116,7 @@ class Patch():
         #sampled_planes = torch.Tensor(sampled_planes).to(device)
 
         print(patch.shape)
-        total_variation = TotalVariation().cuda()
+        total_variation = TotalVariation_3d(mesh, self.idx).to(self.device)
         optimizer = torch.optim.SGD([self.patch], lr=1.0, momentum=0.9)
         #optimizer = torch.optim.SGD([self.patch], lr=1.0, momentum=0.9)
 
@@ -163,10 +163,12 @@ class Patch():
                     d_loss = dis_loss(output, self.dnet.num_classes, self.dnet.anchors, self.dnet.num_anchors, 0)
                     acc_loss = calc_acc(output, self.dnet.num_classes, self.dnet.num_anchors, 0)
 
-                    #tv = self.total_variation(self.patch)
-                    #tv_loss = tv * 2.5
+                    print("Attempt to compute TV")
+                    tv = total_variation(self.patch)
+                    tv_loss = tv * 1.0
+                    print("TV loss get: %f" % tv_loss.item())
                     
-                    loss = d_loss #+ torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
+                    loss = d_loss + tv_loss #+ torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
 
                     ep_loss += loss.item()
                     ep_acc += acc_loss.item()
@@ -183,6 +185,7 @@ class Patch():
             torch.save(patch_save, 'patch_save.pt')
             torch.save(idx_save, 'idx_save.pt')
             save_image(reshape_img[0].cpu().detach(), "TEST_RENDER1.png")
+            
             #save_image(self.patch.cpu().detach().permute(2, 0, 1), self.config.output + '_{}.png'.format(epoch))
             print('epoch={} loss={} success_rate={}'.format(
               epoch, 
@@ -227,7 +230,7 @@ class Patch():
                 #tv = self.total_variation(self.patch)
                 #tv_loss = tv * 2.5
                 
-                loss = d_loss #+ torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
+                loss = d_loss  #+ torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
 
                 total_loss += loss.item()
                 n += 1.0
@@ -239,11 +242,11 @@ class Patch():
         self.num_angles = self.config.num_angles
         azim = torch.linspace(-1 * self.config.angle_range, self.config.angle_range, self.num_angles)
 
-        #R, T = look_at_view_transform(dist=1.0, elev=0, azim=azim)
+        R, T = look_at_view_transform(dist=1.0, elev=0, azim=azim)
 
-        #T[:, 1] = -85
-        #T[:, 2] = 200
-        R, T = look_at_view_transform(2.2, 6, azim)
+        T[:, 1] = -85
+        T[:, 2] = 200
+        # R, T = look_at_view_transform(2.2, 6, azim)
         cameras = FoVPerspectiveCameras(device=self.device, R=R, T=T)
         
         raster_settings = RasterizationSettings(
@@ -354,14 +357,10 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda:0")
-        torch.cuda.set_device(device)
-    else:
-        device = torch.device("cpu")
+
 
     parser.add_argument('--data_path', type=str, default='data')
-    parser.add_argument('--mesh_dir', type=str, default='data/meshes')
+    parser.add_argument('--mesh_dir', type=str, default='data/meshes_small')
     parser.add_argument('--bg_dir', type=str, default='data/background')
     parser.add_argument('--test_bg_dir', type=str, default='data/test_background')
     parser.add_argument('--output', type=str, default='out/patch')
@@ -373,11 +372,19 @@ def main():
     parser.add_argument('--num_angles', type=int, default=21)
     parser.add_argument('--angle_range', type=int, default=10)
     parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--gpu_id', type=int, default=3)
 
     parser.add_argument('--cfgfile', type=str, default="cfg/yolo.cfg")
     parser.add_argument('--weightfile', type=str, default="weights/yolo.weights")
     
     config = parser.parse_args()
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda:%d" % config.gpu_id)
+        torch.cuda.set_device(device)
+    else:
+        device = torch.device("cpu")
+
     trainer = Patch(config, device)
 
     trainer.attack()
