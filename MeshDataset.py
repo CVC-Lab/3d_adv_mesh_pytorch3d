@@ -4,13 +4,14 @@ import os
 from pytorch3d.io import load_objs_as_meshes, load_obj
 
 class MeshDataset(Dataset):
-  def __init__(self, mesh_dir, device, shuffle=True):
+  def __init__(self, mesh_dir, device, shuffle=True, max_num=9999):
     #/data/meshes/...
-    self.len = len(fnmatch.filter(os.listdir(mesh_dir), '*.obj'))
+    self.len = min(len(fnmatch.filter(os.listdir(mesh_dir), '*.obj')), max_num)
     self.mesh_dir = mesh_dir
     self.shuffle = shuffle
 
     self.mesh_filenames = fnmatch.filter(os.listdir(mesh_dir), '*.obj')
+    self.mesh_filenames = self.mesh_filenames[:self.len]
     self.mesh_files = []
     for m in self.mesh_filenames:
       self.mesh_files.append(os.path.join(self.mesh_dir, m))
