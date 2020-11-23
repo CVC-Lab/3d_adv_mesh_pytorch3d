@@ -9,7 +9,6 @@ from torchvision import transforms
 from darknet import Darknet
 
 
-
 def dis_loss(output, num_classes, anchors, num_anchors, target_id=0, only_objectness=1, validation=False):
     anchor_step = len(anchors) // num_anchors
     if output.dim() == 3:
