@@ -358,9 +358,9 @@ class Patch():
                 for bg_batch in self.test_bgs:
                     bg_batch = bg_batch.to(self.device)
                     
-                    #mesh_texture[:, 575:675, 475:575, :] = self.patch[None]
                     texture_image=mesh.textures.atlas_padded()
-                    mesh.textures._atlas_padded[:,self.idx,:,:,:] = self.patch
+                    clamped_patch = self.patch.clone().clamp(min=1e-6, max=0.99999)
+                    mesh.textures._atlas_padded[:,self.idx,:,:,:] = clamped_patch
           
                     mesh.textures.atlas = mesh.textures._atlas_padded
                     mesh.textures._atlas_list = None
@@ -414,12 +414,7 @@ class Patch():
                         if angle==0:
                             image.save("out/images/test_%d.png" % n)
 
-                        #angle_success[angle] += success
-
                     n += 1.0
-
-        # unseen_success_rate = angle_success.mean() / len(self.test_bg_dataset)
-        # print('Unseen model (faster_rcnn) success rate: ', unseen_success_rate.item())
 
     def initialize_patch(self):
         print('Initializing patch...')
@@ -464,7 +459,7 @@ class Patch():
         #     sampled_planes.append(i)
         
         # Sample faces from index file:
-        sampled_planes = np.load('idx/chest_legs1.idx').tolist()
+        sampled_planes = np.load(self.config.idx_dir).tolist()
         idx = torch.Tensor(sampled_planes).long().to(self.device)
         self.idx = idx
         patch = torch.rand(len(sampled_planes), 1, 1, 3, device=(self.device), requires_grad=True)
@@ -629,6 +624,7 @@ def main():
     parser.add_argument('--output', type=str, default='out/patch')
 
     parser.add_argument('--patch_dir', type=str, default=None)
+    parser.add_argument('--idx_dir', type=str, default='idx/chest_legs1.idx')
     
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--img_size', type=int, default=416)
@@ -645,6 +641,9 @@ def main():
     parser.add_argument('--cfgfile', type=str, default="cfg/yolo.cfg")
     parser.add_argument('--weightfile', type=str, default="weights/yolo.weights")
     
+    parser.add_argument('--detector', type=str, default='yolov2')
+    parser.add_argument('--test_only', action='store_true')
+
     config = parser.parse_args()
     trainer = Patch(config, device)
     
@@ -658,8 +657,16 @@ def main():
     #   backbone_name="resnet101", 
     #   prob_thresh=0.6)
 
-    trainer.attack()
-    # trainer.test_patch()
+    if config.test_only:
+        if config.detector == 'yolov2':
+            trainer.test_patch() 
+        elif config.detector == 'faster_rcnn':
+            trainer.test_patch_faster_rcnn()
+    else:
+        if config.detector == 'yolov2':
+            trainer.attack() 
+        elif config.detector == 'faster_rcnn':
+            trainer.attack_faster_rcnn()
 
 if __name__ == '__main__':
     main()
