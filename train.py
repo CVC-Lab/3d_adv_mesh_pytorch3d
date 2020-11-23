@@ -639,7 +639,7 @@ def main():
     parser.add_argument('--num_meshes', type=int, default=1)
 
     parser.add_argument('--cfgfile', type=str, default="cfg/yolo.cfg")
-    parser.add_argument('--weightfile', type=str, default="weights/yolo.weights")
+    parser.add_argument('--weightfile', type=str, default="data/yolov2/yolo.weights")
     
     parser.add_argument('--detector', type=str, default='yolov2')
     parser.add_argument('--test_only', action='store_true')
