@@ -4,14 +4,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn.functional as F
 import torchvision.transforms as T
+import sys
+import random
+
 from torch.utils.data import DataLoader, Dataset
 from skimage.io import imread
 from PIL import Image
 
-# Util function for loading meshes
 from pytorch3d.io import load_objs_as_meshes, load_obj
-
-# Data structures and functions for rendering
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import (
     look_at_view_transform,
@@ -29,10 +29,6 @@ from pytorch3d.renderer import (
     BlendParams,
     SoftSilhouetteShader
 )
-
-import sys
-import os
-
 
 from MeshDataset import MeshDataset
 from BackgroundDataset import BackgroundDataset
@@ -60,12 +56,11 @@ class Patch():
         self.renderer = self.create_renderer()
 
         # Datasets
-        self.mesh_dataset = MeshDataset(config.mesh_dir, device)
+        self.mesh_dataset = MeshDataset(config.mesh_dir, device, max_num=config.num_meshes)
         self.bg_dataset = BackgroundDataset(config.bg_dir, config.img_size, max_num=config.num_bgs)
         self.test_bg_dataset = BackgroundDataset(config.test_bg_dir, config.img_size, max_num=config.num_test_bgs)
 
-        # Initialize adversarial patch, and TV loss
-        #self.patch = torch.rand((100, 100, 3), device=device, requires_grad=True)
+        # Initialize adversarial patch
         self.patch = None
         self.idx = None
 
@@ -84,8 +79,26 @@ class Patch():
           batch_size=1, 
           shuffle=True, 
           num_workers=1)
-        
-    def attack(self):
+  
+        self.min_contrast = 0.8
+        self.max_contrast = 1.2
+        self.min_brightness = -0.1
+        self.max_brightness = 0.1
+        self.noise_factor = 0.10
+
+    def attack_faster_rcnn(self):
+        path_to_checkpoint='model-180000.pth'
+        dataset_name="coco2017"
+        backbone_name="resnet101"
+        prob_thresh=0.6
+
+        dataset_class = DatasetBase.from_name(dataset_name)
+        backbone = BackboneBase.from_name(backbone_name)(pretrained=False)
+        model = FasterRCNN(backbone, dataset_class.num_classes(), pooler_mode=Config.POOLER_MODE,
+                  anchor_ratios=Config.ANCHOR_RATIOS, anchor_sizes=Config.ANCHOR_SIZES,
+                  rpn_pre_nms_top_n=Config.RPN_PRE_NMS_TOP_N, rpn_post_nms_top_n=Config.RPN_POST_NMS_TOP_N).cuda()
+        model.load(path_to_checkpoint)
+
         train_bgs = DataLoader(
             self.bg_dataset, 
             batch_size=self.config.batch_size, 
@@ -98,7 +111,7 @@ class Patch():
         mesh = self.mesh_dataset.meshes[0]
         total_variation = TotalVariation_3d(mesh, self.idx).to(self.device)
 
-        optimizer = torch.optim.SGD([self.patch], lr=1.0, momentum=0.9)
+        optimizer = torch.optim.SGD([self.patch], lr=1e-1, momentum=0.9)
 
         for epoch in range(self.config.epochs):
             ep_loss = 0.0
@@ -115,7 +128,123 @@ class Patch():
                     optimizer.zero_grad()
 
                     texture_image = mesh.textures.atlas_padded()
-                    mesh.textures._atlas_padded[:,self.idx,:,:,:] = self.patch
+
+                    # Random patch augmentation
+                    contrast = torch.FloatTensor(1).uniform_(self.min_contrast, self.max_contrast).to(self.device)
+                    brightness = torch.FloatTensor(1).uniform_(self.min_brightness, self.max_brightness).to(self.device)
+                    noise = torch.FloatTensor(self.patch.shape).uniform_(-1, 1) * self.noise_factor
+                    noise = noise.to(self.device)
+                    augmented_patch = (self.patch * contrast) + brightness + noise
+
+                    # Clamp patch to avoid PyTorch3D issues
+                    clamped_patch = augmented_patch.clone().clamp(min=1e-6, max=0.99999)
+                    mesh.textures._atlas_padded[:,self.idx,:,:,:] = clamped_patch
+      
+                    mesh.textures.atlas = mesh.textures._atlas_padded
+                    mesh.textures._atlas_list = None
+
+                    # Render mesh onto background image
+                    rand_translation = torch.randint(
+                      -self.config.rand_translation, 
+                      self.config.rand_translation, 
+                      (2,)
+                      )
+
+                    images = self.render_mesh_on_bg_batch(mesh, bg_batch, self.num_angles_train, x_translation=rand_translation[0].item(),
+                                                          y_translation=rand_translation[1].item())
+                    
+                    reshape_img = images[:,:,:,:3].permute(0, 3, 1, 2)
+                    reshape_img = reshape_img.to(self.device)
+
+                    # image_tensor, scale = dataset_class.preprocess(reshape_img, Config.IMAGE_MIN_SIDE, Config.IMAGE_MAX_SIDE)
+                    detection_bboxes, detection_classes, detection_probs, _ = \
+                        model.eval().forward(reshape_img.cuda())
+                    # detection_bboxes /= scale
+
+                    kept_indices = detection_probs > prob_thresh
+                    detection_bboxes = detection_bboxes[kept_indices]
+                    detection_classes = detection_classes[kept_indices]
+                    detection_probs = detection_probs[kept_indices]
+                    human_dets = torch.where(detection_classes == 1, torch.ones(1), torch.zeros(1)).cuda()
+
+                    disap_loss = torch.mean(human_dets * detection_probs)
+
+                    tv = total_variation(self.patch)
+                    tv_loss = tv * 2.5
+                    
+                    loss = disap_loss + tv_loss
+                    
+                    n += bg_batch.shape[0]
+
+                    if torch.isnan(loss).item():
+                      continue
+
+                    ep_loss += loss.item()
+
+                    loss.backward(retain_graph=True)
+                    optimizer.step()
+            
+            # Save image and print performance statistics
+            print('tv={}, dis={}'.format(tv_loss, disap_loss))
+            patch_save = self.patch.cpu().detach().clone()
+            idx_save = self.idx.cpu().detach().clone()
+            torch.save(patch_save, 'patch_save.pt')
+            torch.save(idx_save, 'idx_save.pt')
+            
+            print('epoch={} loss={}'.format(
+              epoch, 
+              (ep_loss / n)
+              )
+            )
+
+            if epoch % 5 == 0:
+              self.test_patch()
+              self.change_cameras('train')
+
+    def attack(self):
+        train_bgs = DataLoader(
+            self.bg_dataset, 
+            batch_size=self.config.batch_size, 
+            shuffle=True, 
+            num_workers=1)
+
+        if self.patch is None or self.idx is None:
+          self.initialize_patch()
+        
+        mesh = self.mesh_dataset.meshes[0]
+        total_variation = TotalVariation_3d(mesh, self.idx).to(self.device)
+
+        optimizer = torch.optim.SGD([self.patch], lr=1e-1, momentum=0.9)
+        
+        for epoch in range(self.config.epochs):
+            ep_loss = 0.0
+            ep_acc = 0.0
+            n = 0.0
+
+            for mesh in self.mesh_dataset:
+                # Copy mesh for each camera angle
+                mesh = mesh.extend(self.num_angles_train)
+
+                for bg_batch in train_bgs:
+                    bg_batch = bg_batch.to(self.device)
+
+                    # To enable random camera distance training, uncomment this line:
+                    # self.change_cameras('train', camera_dist=random.uniform(1.4, 3.0))
+
+                    optimizer.zero_grad()
+
+                    texture_image = mesh.textures.atlas_padded()
+
+                    # Random patch augmentation
+                    contrast = torch.FloatTensor(1).uniform_(self.min_contrast, self.max_contrast).to(self.device)
+                    brightness = torch.FloatTensor(1).uniform_(self.min_brightness, self.max_brightness).to(self.device)
+                    noise = torch.FloatTensor(self.patch.shape).uniform_(-1, 1) * self.noise_factor
+                    noise = noise.to(self.device)
+                    augmented_patch = (self.patch * contrast) + brightness + noise
+
+                    # Clamp patch to avoid PyTorch3D issues
+                    clamped_patch = augmented_patch.clone().clamp(min=1e-6, max=0.99999)
+                    mesh.textures._atlas_padded[:,self.idx,:,:,:] = clamped_patch
       
                     mesh.textures.atlas = mesh.textures._atlas_padded
                     mesh.textures._atlas_list = None
@@ -139,17 +268,16 @@ class Patch():
                     d_loss = dis_loss(output, self.dnet.num_classes, self.dnet.anchors, self.dnet.num_anchors, 0)
                     acc_loss = calc_acc(output, self.dnet.num_classes, self.dnet.num_anchors, 0)
 
-                    tv = self.total_variation(self.patch)
+                    tv = total_variation(self.patch)
                     tv_loss = tv * 2.5
                     
-                    loss = d_loss + tv_loss #+ torch.sum(torch.max(tv_loss, torch.tensor(0.1).to(self.device)))
+                    loss = d_loss + tv_loss
 
                     ep_loss += loss.item()
                     ep_acc += acc_loss.item()
                     
                     n += bg_batch.shape[0]
 
-                    # TODO: need to remove retain_graph
                     loss.backward(retain_graph=True)
                     optimizer.step()
             
@@ -158,16 +286,15 @@ class Patch():
             idx_save = self.idx.cpu().detach().clone()
             torch.save(patch_save, 'patch_save.pt')
             torch.save(idx_save, 'idx_save.pt')
-            # save_image(reshape_img[2].cpu().detach(), "TEST_RENDER.png")
-            
-            #save_image(self.patch.cpu().detach().permute(2, 0, 1), self.config.output + '_{}.png'.format(epoch))
+
+            save_image(reshape_img[0].cpu().detach(), "TEST_RENDER.png")
+        
             print('epoch={} loss={} success_rate={}'.format(
               epoch, 
               (ep_loss / n), 
               (ep_acc / n) / self.num_angles_train)
             )
 
-            # Every 5 epochs, run test_patch
             if epoch % 5 == 0:
               self.test_patch()
               self.change_cameras('train')
@@ -183,7 +310,9 @@ class Patch():
                 bg_batch = bg_batch.to(self.device)
 
                 texture_image=mesh.textures.atlas_padded()
-                mesh.textures._atlas_padded[:,self.idx,:,:,:] = self.patch
+                                
+                clamped_patch = self.patch.clone().clamp(min=1e-6, max=0.99999)
+                mesh.textures._atlas_padded[:,self.idx,:,:,:] = clamped_patch
       
                 mesh.textures.atlas = mesh.textures._atlas_padded
                 mesh.textures._atlas_list = None
@@ -207,13 +336,12 @@ class Patch():
 
                 n += bg_batch.shape[0]
         
-        # save_image(reshape_img[0].cpu().detach(), "TEST.png")
+        save_image(reshape_img[0].cpu().detach(), "TEST.png")
         unseen_success_rate = torch.sum(angle_success) / (n * self.num_angles_test)
         print('Angle success rates: ', angle_success / n)
         print('Unseen bg success rate: ', unseen_success_rate.item())
 
     def test_patch_faster_rcnn(self, path_to_checkpoint: str, dataset_name: str, backbone_name: str, prob_thresh: float):
-        #TODO: Make it for general model(even though this might be difficult)
         dataset_class = DatasetBase.from_name(dataset_name)
         backbone = BackboneBase.from_name(backbone_name)(pretrained=False)
         model = FasterRCNN(backbone, dataset_class.num_classes(), pooler_mode=Config.POOLER_MODE,
@@ -295,44 +423,48 @@ class Patch():
 
     def initialize_patch(self):
         print('Initializing patch...')
-        mesh = self.mesh_dataset.meshes[0]
-        box = mesh.get_bounding_boxes()
-        max_x = box[0,0,1]
-        max_y = box[0,1,1]
-        max_z = box[0,2,1]
-        min_x = box[0,0,0]
-        min_y = box[0,1,0]
-        min_z = box[0,2,0]
+        # Code for sampling faces:
+        # mesh = self.mesh_dataset.meshes[0]
+        # box = mesh.get_bounding_boxes()
+        # max_x = box[0,0,1]
+        # max_y = box[0,1,1]
+        # max_z = box[0,2,1]
+        # min_x = box[0,0,0]
+        # min_y = box[0,1,0]
+        # min_z = box[0,2,0]
 
-        len_z = max_z - min_z
-        len_x = max_x - min_x
-        len_y = max_y - min_y
+        # len_z = max_z - min_z
+        # len_x = max_x - min_x
+        # len_y = max_y - min_y
 
-        verts = mesh.verts_padded()
-        v_shape = verts.shape
-        sampled_verts = torch.zeros(v_shape[1]).to('cuda')
+        # verts = mesh.verts_padded()
+        # v_shape = verts.shape
+        # sampled_verts = torch.zeros(v_shape[1]).to('cuda')
 
-        for i in range(v_shape[1]):
-          #original human1 not SMPL
-          #if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.3 and verts[0,i,0] < min_x + len_x*0.7 and verts[0,i,1] > min_y + len_y*0.6 and verts[0,i,1] < min_y + len_y*0.7:
-          #SMPL front
-          if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
-          #back
-          #if verts[0,i,2] < min_z + len_z * 0.5 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
-          #leg
-          #if verts[0,i,0] > min_x + len_x*0.5 and verts[0,i,0] < min_x + len_x and verts[0,i,1] > min_y + len_y*0.2 and verts[0,i,1] < min_y + len_y*0.3:
-            sampled_verts[i] = 1
+        # for i in range(v_shape[1]):
+        #   #original human1 not SMPL
+        #   #if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.3 and verts[0,i,0] < min_x + len_x*0.7 and verts[0,i,1] > min_y + len_y*0.6 and verts[0,i,1] < min_y + len_y*0.7:
+        #   #SMPL front
+        #   if verts[0,i,2] > min_z + len_z * 0.55 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
+        #   #back
+        #   #if verts[0,i,2] < min_z + len_z * 0.5 and verts[0,i,0] > min_x + len_x*0.35 and verts[0,i,0] < min_x + len_x*0.65 and verts[0,i,1] > min_y + len_y*0.65 and verts[0,i,1] < min_y + len_y*0.75:
+        #   #leg
+        #   #if verts[0,i,0] > min_x + len_x*0.5 and verts[0,i,0] < min_x + len_x and verts[0,i,1] > min_y + len_y*0.2 and verts[0,i,1] < min_y + len_y*0.3:
+        #     sampled_verts[i] = 1
 
-        faces = mesh.faces_padded()
-        f_shape = faces.shape
+        # faces = mesh.faces_padded()
+        # f_shape = faces.shape
 
-        sampled_planes = list()
-        for i in range(faces.shape[1]):
-          v1 = faces[0,i,0]
-          v2 = faces[0,i,1]
-          v3 = faces[0,i,2]
-          if sampled_verts[v1]+sampled_verts[v2]+sampled_verts[v3]>=1:
-            sampled_planes.append(i)
+        # sampled_planes = list()
+        # for i in range(faces.shape[1]):
+        #   v1 = faces[0,i,0]
+        #   v2 = faces[0,i,1]
+        #   v3 = faces[0,i,2]
+        #   if sampled_verts[v1]+sampled_verts[v2]+sampled_verts[v3]>=1:
+        #     sampled_planes.append(i)
+        
+        # Sample faces from index file:
+        sampled_planes = np.load('idx/chest_legs1.idx').tolist()
         idx = torch.Tensor(sampled_planes).long().to(self.device)
         self.idx = idx
         patch = torch.rand(len(sampled_planes), 1, 1, 3, device=(self.device), requires_grad=True)
@@ -345,17 +477,13 @@ class Patch():
         azim_train = torch.linspace(-1 * self.config.angle_range_train, self.config.angle_range_train, self.num_angles_train)
         azim_test = torch.linspace(-1 * self.config.angle_range_test, self.config.angle_range_test, self.num_angles_test)
 
-        # These lines were for original mesh
-        #R, T = look_at_view_transform(dist=1.0, elev=0, azim=azim)
-        # T[:, 1] = -85
-        # T[:, 2] = 200
-
         # Cameras for SMPL meshes:
-        R, T = look_at_view_transform(2.2, 6, azim_train)
+        camera_dist = 2.2
+        R, T = look_at_view_transform(camera_dist, 6, azim_train)
         train_cameras = FoVPerspectiveCameras(device=self.device, R=R, T=T)
         self.train_cameras = train_cameras
 
-        R, T = look_at_view_transform(2.2, 6, azim_test)
+        R, T = look_at_view_transform(camera_dist, 6, azim_test)
         test_cameras = FoVPerspectiveCameras(device=self.device, R=R, T=T)
         self.test_cameras = test_cameras
         
@@ -381,7 +509,18 @@ class Patch():
 
         return renderer
     
-    def change_cameras(self, mode):
+    def change_cameras(self, mode, camera_dist=2.2):
+      azim_train = torch.linspace(-1 * self.config.angle_range_train, self.config.angle_range_train, self.num_angles_train)
+      azim_test = torch.linspace(-1 * self.config.angle_range_test, self.config.angle_range_test, self.num_angles_test)
+
+      R, T = look_at_view_transform(camera_dist, 6, azim_train)
+      train_cameras = FoVPerspectiveCameras(device=self.device, R=R, T=T)
+      self.train_cameras = train_cameras
+
+      R, T = look_at_view_transform(camera_dist, 6, azim_test)
+      test_cameras = FoVPerspectiveCameras(device=self.device, R=R, T=T)
+      self.test_cameras = test_cameras
+
       if mode == 'train':
         self.renderer.rasterizer.cameras=self.train_cameras
         self.renderer.shader.cameras=self.train_cameras
@@ -501,6 +640,7 @@ def main():
     parser.add_argument('--angle_range_train', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--rand_translation', type=int, default=50)
+    parser.add_argument('--num_meshes', type=int, default=1)
 
     parser.add_argument('--cfgfile', type=str, default="cfg/yolo.cfg")
     parser.add_argument('--weightfile', type=str, default="weights/yolo.weights")
@@ -519,6 +659,7 @@ def main():
     #   prob_thresh=0.6)
 
     trainer.attack()
+    # trainer.test_patch()
 
 if __name__ == '__main__':
     main()
