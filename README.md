@@ -2,8 +2,16 @@
 # Learning Transferable 3D Adversarial Cloaks for Deep Trained Detectors #
 
 ## Prerequisites
-Our human meshes and background images can be downloaded from:
-DRIVE_LINK
+Our human meshes, background images, and yolov2 model file can be downloaded from:
+https://mega.nz/file/pZtUCKza#6AF3AkIYxiWXysqoo78nbjKoTCos6-PwU_UBaSntIA8
+
+After extracting the .zip file, your directory should contain
+```
+./data/background
+./data/meshes
+./data/test_background
+./data/yolov2
+```
 
 PyTorch 1.7.0 and Torchvision 0.8.1:
 ```
