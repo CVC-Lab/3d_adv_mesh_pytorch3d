@@ -459,7 +459,7 @@ class Patch():
         #     sampled_planes.append(i)
         
         # Sample faces from index file:
-        sampled_planes = np.load(self.config.idx_dir).tolist()
+        sampled_planes = np.load(self.config.idx).tolist()
         idx = torch.Tensor(sampled_planes).long().to(self.device)
         self.idx = idx
         patch = torch.rand(len(sampled_planes), 1, 1, 3, device=(self.device), requires_grad=True)
@@ -624,7 +624,7 @@ def main():
     parser.add_argument('--output', type=str, default='out/patch')
 
     parser.add_argument('--patch_dir', type=str, default=None)
-    parser.add_argument('--idx_dir', type=str, default='idx/chest_legs1.idx')
+    parser.add_argument('--idx', type=str, default='idx/chest_legs1.idx')
     
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--img_size', type=int, default=416)
