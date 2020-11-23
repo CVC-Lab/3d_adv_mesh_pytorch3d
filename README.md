@@ -30,6 +30,8 @@ python faster_rcnn/support/setup.py develop
 Faster R-CNN pretrained checkpoint can be found here:
 https://github.com/potterhsu/easy-faster-rcnn.pytorch
 
+Move the `model-180000.pth` checkpoint to `faster_rcnn/model-180000.pth`.
+
 ## Training
 To train an adversarial patch:
 ```

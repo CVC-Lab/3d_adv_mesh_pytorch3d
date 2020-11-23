@@ -409,7 +409,7 @@ class Patch():
                             bbox = BBox(left=bbox[0], top=bbox[1], right=bbox[2], bottom=bbox[3])
                             category = dataset_class.LABEL_TO_CATEGORY_DICT[cls]
 
-                            draw.rectangle(((bbox.left, bbox.top), (bbox.right, bbox.bottom)), outline=color)
+                            draw.rectangle(((bbox.left, bbox.top), (bbox.right, bbox.bottom)), outline=color, width=3)
                             draw.text((bbox.left, bbox.top), text=f'{category:s} {prob:.3f}', fill=color)
                         if angle==0:
                             image.save("out/images/test_%d.png" % n)
@@ -661,7 +661,12 @@ def main():
         if config.detector == 'yolov2':
             trainer.test_patch() 
         elif config.detector == 'faster_rcnn':
-            trainer.test_patch_faster_rcnn()
+            trainer.test_patch_faster_rcnn(
+                path_to_checkpoint='faster_rcnn/model-180000.pth',
+                dataset_name="coco2017", 
+                backbone_name="resnet101", 
+                prob_thresh=0.6
+            )
     else:
         if config.detector == 'yolov2':
             trainer.attack() 
