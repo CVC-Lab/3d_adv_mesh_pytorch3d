@@ -137,5 +137,5 @@ dmypy.json
 /out
 /faster_rcnn
 *.png
-*.pt
 train_tmp.py
+cub-1.10.0/
