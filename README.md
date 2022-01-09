@@ -13,7 +13,7 @@ After extracting the .zip file, your directory should contain
 ./data/yolov2
 ```
 
-PyTorch 1.7.0 and Torchvision 0.8.1:
+PyTorch 1.8.0 and Torchvision 0.8.1 (tested in python 3.8):
 ```
 pip install torch torchvision
 ```
