@@ -36,7 +36,7 @@ Move the `model-180000.pth` checkpoint to `faster_rcnn/model-180000.pth`.
 ## Training
 To train an adversarial patch:
 ```
-python train.py --mesh_dir=data/humans --epochs=100 --num_bgs=1024 --num_test_bgs=1024 --batch_size=12 --num_angles_train=1 --angle_range_train=0 --num_angles_test=21 --angle_range_test=10 --idx=idx/letter_G.idx --detector=yolov2
+python train.py --mesh_dir=data/meshes --epochs=100 --num_bgs=1024 --num_test_bgs=1024 --batch_size=12 --num_angles_train=1 --angle_range_train=0 --num_angles_test=21 --angle_range_test=10 --idx=idx/chest_legs1.idx --detector=yolov2 --patch_dir=example_logos/fasterrcnn_chest_legs
 ```
 During training, the script will save the adversarial texture atlas and face indices to `patch_save.pt` and `idx_save.pt` respectively. The `--idx` argument specifies the indices of the patch. To generate new .idx files, see the Blender script `face_sampler.py`.
 
