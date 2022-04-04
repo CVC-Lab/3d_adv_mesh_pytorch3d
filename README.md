@@ -24,7 +24,7 @@ pip install 'git+https://github.com/facebookresearch/pytorch3d.git@v0.2.5'
 
 To train/test on Faster R-CNN:
 ```
-git clone https://github.com/potterhsu/easy-faster-rcnn.pytorch.git 
+git clone https://github.com/potterhsu/easy-faster-rcnn.pytorch.git faster_rcnn
 cd faster_rcnn
 python support/setup.py develop
 ```
